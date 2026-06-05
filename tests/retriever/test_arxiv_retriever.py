@@ -88,3 +88,55 @@ def test_run_with_hard_timeout_returns_none_on_failure(monkeypatch):
     )
     assert result is None
     assert "boom" in warnings[0]
+
+
+def test_arxiv_retriever_skips_batch_after_exhausted_429_retries(config, monkeypatch):
+    monkeypatch.setattr(arxiv_retriever, "sleep", lambda _: None)
+
+    entries = [
+        feedparser.FeedParserDict(
+            {
+                "id": f"oai:arXiv.org:{i:04d}.00001v1",
+                "title": f"Paper {i}",
+                "arxiv_announce_type": "new",
+            }
+        )
+        for i in range(21)
+    ]
+    monkeypatch.setattr(
+        feedparser,
+        "parse",
+        lambda _: SimpleNamespace(feed=SimpleNamespace(title="ok"), entries=entries),
+    )
+
+    class FakeClient:
+        def __init__(self, **kw):
+            pass
+
+        def results(self, search):
+            ids = getattr(search, "id_list", [])
+            if ids and ids[0].startswith("0020"):
+                raise arxiv_retriever.arxiv.HTTPError("https://export.arxiv.org/api/query", 0, 429)
+            return iter(
+                [
+                    SimpleNamespace(
+                        title=f"Title {pid}",
+                        authors=[SimpleNamespace(name="Test Author")],
+                        summary="Test abstract",
+                        pdf_url=f"https://arxiv.org/pdf/{pid}",
+                        entry_id=f"https://arxiv.org/abs/{pid}",
+                        source_url=lambda pid=pid: f"https://arxiv.org/e-print/{pid}",
+                    )
+                    for pid in ids
+                ]
+            )
+
+    monkeypatch.setattr(arxiv_retriever.arxiv, "Client", FakeClient)
+    monkeypatch.setattr(arxiv_retriever, "extract_text_from_html", lambda paper: None)
+    monkeypatch.setattr(arxiv_retriever, "extract_text_from_pdf", lambda paper: None)
+    monkeypatch.setattr(arxiv_retriever, "extract_text_from_tar", lambda paper: None)
+
+    papers = ArxivRetriever(config).retrieve_papers()
+
+    assert len(papers) == 20
+    assert all("0020.00001v1" not in p.url for p in papers)
