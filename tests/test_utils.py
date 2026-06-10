@@ -186,6 +186,28 @@ def test_send_email_falls_back_to_plain(config, monkeypatch):
     assert len(sent) == 1
 
 
+def test_send_email_returns_when_all_connections_fail(config, monkeypatch):
+    sent = []
+    call_count = {"smtp": 0}
+
+    class StubSMTP_TLS_And_Plain_Fail:
+        def __init__(self, *a, **kw):
+            call_count["smtp"] += 1
+            if call_count["smtp"] > 1:
+                raise OSError("plain SMTP failed")
+        def starttls(self):
+            raise OSError("TLS not supported")
+
+    class StubSMTP_SSL_Fails:
+        def __init__(self, *a, **kw):
+            raise OSError("SSL not supported")
+
+    monkeypatch.setattr(smtplib, "SMTP", StubSMTP_TLS_And_Plain_Fail)
+    monkeypatch.setattr(smtplib, "SMTP_SSL", StubSMTP_SSL_Fails)
+    send_email(config, "<html>fail</html>")
+    assert sent == []
+
+
 # ---------------------------------------------------------------------------
 # extract_tex_code_from_tar
 # ---------------------------------------------------------------------------
